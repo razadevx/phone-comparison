@@ -78,6 +78,55 @@ input {
   padding: 3rem 0 4rem;
 }
 
+.login-page {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.login-card {
+  width: min(520px, 100%);
+  backdrop-filter: blur(18px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+  padding: 2rem;
+  text-align: center;
+}
+
+.login-card h1 {
+  margin: 1rem 0 0.75rem;
+  font-size: clamp(2rem, 5vw, 3rem);
+  line-height: 1;
+}
+
+.login-text {
+  margin: 0 0 1.5rem;
+  color: var(--text-muted);
+  font-size: 1rem;
+}
+
+.login-form {
+  display: grid;
+  gap: 1rem;
+  text-align: left;
+}
+
+.login-button {
+  width: 100%;
+  margin-top: 0;
+}
+
+.login-hint {
+  margin: 1rem 0 0;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
 .hero {
   text-align: center;
   margin-bottom: 2rem;
@@ -318,13 +367,15 @@ input {
 
   .search-panel,
   .phone-card,
-  .comparison-section {
+  .comparison-section,
+  .login-card {
     border-radius: 22px;
   }
 
   .search-panel,
   .phone-card,
-  .comparison-section {
+  .comparison-section,
+  .login-card {
     padding: 1rem;
   }
 

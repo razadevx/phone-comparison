@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import SearchBox from "./components/SearchBox";
 import PhoneCard from "./components/PhoneCard";
 import ComparisonTable from "./components/ComparisonTable";
+import LoginPage from "./components/LoginPage";
 import { phoneCatalog } from "./data/phoneCatalog";
 
 const API_SOURCES = [
@@ -20,6 +21,9 @@ const EMPTY_INPUT_ERROR = "Please enter both mobile names.";
 const NOT_FOUND_ERROR = "Mobile not found. Try writing the full model name.";
 const API_UNAVAILABLE_ERROR =
   "The public phone API is unavailable right now. The app can still compare phones available in the built-in demo catalog.";
+const LOGIN_PASSWORD = "1234";
+const LOGIN_ERROR = "Incorrect password. Please try again.";
+const LOGIN_STORAGE_KEY = "mobile-comparison-auth";
 
 const specMap = {
   releaseDate: {
@@ -299,6 +303,9 @@ async function searchPhone(query) {
 }
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
   const [leftQuery, setLeftQuery] = useState("");
   const [rightQuery, setRightQuery] = useState("");
   const [leftPhone, setLeftPhone] = useState(null);
@@ -306,6 +313,25 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [hasCompared, setHasCompared] = useState(false);
+
+  useEffect(() => {
+    const savedLogin = window.sessionStorage.getItem(LOGIN_STORAGE_KEY);
+    setIsAuthenticated(savedLogin === "true");
+  }, []);
+
+  const handleLogin = (event) => {
+    event.preventDefault();
+
+    if (loginPassword === LOGIN_PASSWORD) {
+      window.sessionStorage.setItem(LOGIN_STORAGE_KEY, "true");
+      setIsAuthenticated(true);
+      setLoginError("");
+      setLoginPassword("");
+      return;
+    }
+
+    setLoginError(LOGIN_ERROR);
+  };
 
   const handleCompare = async () => {
     const firstPhone = leftQuery.trim();
@@ -356,6 +382,21 @@ export default function App() {
           rightValue: row.formatter(rightPhone) || "Not available",
         }))
       : [];
+
+  if (!isAuthenticated) {
+    return (
+      <div className="app-shell">
+        <div className="background-orb background-orb-left" />
+        <div className="background-orb background-orb-right" />
+        <LoginPage
+          password={loginPassword}
+          onPasswordChange={setLoginPassword}
+          onSubmit={handleLogin}
+          errorMessage={loginError}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">
