@@ -21,9 +21,8 @@ const EMPTY_INPUT_ERROR = "Please enter both mobile names.";
 const NOT_FOUND_ERROR = "Mobile not found. Try writing the full model name.";
 const API_UNAVAILABLE_ERROR =
   "The public phone API is unavailable right now. The app can still compare phones available in the built-in demo catalog.";
-const LOGIN_PASSWORD = "1234";
-const LOGIN_ERROR = "Incorrect password. Please try again.";
-const LOGIN_STORAGE_KEY = "mobile-comparison-auth";
+const USERS_STORAGE_KEY = "mobile-comparison-users";
+const SESSION_STORAGE_KEY = "mobile-comparison-current-user";
 
 const specMap = {
   releaseDate: {
@@ -100,6 +99,29 @@ function cleanValue(value) {
   }
 
   return typeof value === "string" ? value.trim() : value;
+}
+
+function normalizeEmail(value) {
+  return (value || "").trim().toLowerCase();
+}
+
+function getStoredUsers() {
+  const rawUsers = window.localStorage.getItem(USERS_STORAGE_KEY);
+
+  if (!rawUsers) {
+    return [];
+  }
+
+  try {
+    const parsedUsers = JSON.parse(rawUsers);
+    return Array.isArray(parsedUsers) ? parsedUsers : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredUsers(users) {
+  window.localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
 }
 
 function pickSection(sections, sectionKeys) {
@@ -303,9 +325,17 @@ async function searchPhone(query) {
 }
 
 export default function App() {
+  const [authMode, setAuthMode] = useState("login");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [loginPassword, setLoginPassword] = useState("");
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authForm, setAuthForm] = useState({
+    name: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
+  });
   const [loginError, setLoginError] = useState("");
+  const [authSuccess, setAuthSuccess] = useState("");
   const [leftQuery, setLeftQuery] = useState("");
   const [rightQuery, setRightQuery] = useState("");
   const [leftPhone, setLeftPhone] = useState(null);
@@ -315,22 +345,150 @@ export default function App() {
   const [hasCompared, setHasCompared] = useState(false);
 
   useEffect(() => {
-    const savedLogin = window.sessionStorage.getItem(LOGIN_STORAGE_KEY);
-    setIsAuthenticated(savedLogin === "true");
+    const savedSession = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+
+    if (!savedSession) {
+      return;
+    }
+
+    try {
+      const parsedSession = JSON.parse(savedSession);
+      setCurrentUser(parsedSession);
+      setIsAuthenticated(true);
+    } catch {
+      window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    }
   }, []);
+
+  const updateAuthField = (field, value) => {
+    setAuthForm((currentForm) => ({
+      ...currentForm,
+      [field]: value,
+    }));
+  };
+
+  const resetAuthForm = () => {
+    setAuthForm({
+      name: "",
+      email: "",
+      password: "",
+      confirmPassword: "",
+    });
+  };
+
+  const handleAuthModeChange = (mode) => {
+    setAuthMode(mode);
+    setLoginError("");
+    setAuthSuccess("");
+    resetAuthForm();
+  };
 
   const handleLogin = (event) => {
     event.preventDefault();
 
-    if (loginPassword === LOGIN_PASSWORD) {
-      window.sessionStorage.setItem(LOGIN_STORAGE_KEY, "true");
-      setIsAuthenticated(true);
-      setLoginError("");
-      setLoginPassword("");
+    const email = normalizeEmail(authForm.email);
+    const password = authForm.password.trim();
+
+    setLoginError("");
+    setAuthSuccess("");
+
+    if (authMode === "register") {
+      const name = authForm.name.trim();
+      const confirmPassword = authForm.confirmPassword.trim();
+
+      if (!name || !email || !password || !confirmPassword) {
+        setLoginError("Please fill in all registration fields.");
+        return;
+      }
+
+      if (!email.includes("@")) {
+        setLoginError("Please enter a valid email address.");
+        return;
+      }
+
+      if (password.length < 4) {
+        setLoginError("Password must be at least 4 characters long.");
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        setLoginError("Passwords do not match.");
+        return;
+      }
+
+      const storedUsers = getStoredUsers();
+      const existingUser = storedUsers.find(
+        (user) => normalizeEmail(user.email) === email
+      );
+
+      if (existingUser) {
+        setLoginError("An account with this email already exists.");
+        return;
+      }
+
+      const newUser = {
+        id: Date.now(),
+        name,
+        email,
+        password,
+      };
+
+      saveStoredUsers([...storedUsers, newUser]);
+      setAuthSuccess("Registration successful. Please log in with your account.");
+      setAuthMode("login");
+      setAuthForm({
+        name: "",
+        email,
+        password: "",
+        confirmPassword: "",
+      });
       return;
     }
 
-    setLoginError(LOGIN_ERROR);
+    if (!email || !password) {
+      setLoginError("Please enter your email and password.");
+      return;
+    }
+
+    const storedUsers = getStoredUsers();
+    const matchedUser = storedUsers.find(
+      (user) =>
+        normalizeEmail(user.email) === email && user.password === password
+    );
+
+    if (!matchedUser) {
+      setLoginError("Invalid email or password.");
+      return;
+    }
+
+    const sessionUser = {
+      id: matchedUser.id,
+      name: matchedUser.name,
+      email: matchedUser.email,
+    };
+
+    window.sessionStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify(sessionUser)
+    );
+    setCurrentUser(sessionUser);
+    setIsAuthenticated(true);
+    setLoginError("");
+    setAuthSuccess("");
+    resetAuthForm();
+  };
+
+  const handleLogout = () => {
+    window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    setIsAuthenticated(false);
+    setCurrentUser(null);
+    setLeftPhone(null);
+    setRightPhone(null);
+    setLeftQuery("");
+    setRightQuery("");
+    setHasCompared(false);
+    setErrorMessage("");
+    handleAuthModeChange("login");
   };
 
   const handleCompare = async () => {
@@ -389,10 +547,13 @@ export default function App() {
         <div className="background-orb background-orb-left" />
         <div className="background-orb background-orb-right" />
         <LoginPage
-          password={loginPassword}
-          onPasswordChange={setLoginPassword}
+          authMode={authMode}
+          formData={authForm}
+          onFieldChange={updateAuthField}
           onSubmit={handleLogin}
+          onModeChange={handleAuthModeChange}
           errorMessage={loginError}
+          successMessage={authSuccess}
         />
       </div>
     );
@@ -404,6 +565,15 @@ export default function App() {
       <div className="background-orb background-orb-right" />
 
       <main className="page">
+        <section className="app-topbar">
+          <div className="session-chip">
+            Signed in as {currentUser?.name || currentUser?.email}
+          </div>
+          <button type="button" className="logout-button" onClick={handleLogout}>
+            Logout
+          </button>
+        </section>
+
         <section className="hero">
           <p className="hero-badge">University Project Friendly</p>
           <h1>Mobile Comparison Web App</h1>
