@@ -5,6 +5,8 @@ import ComparisonTable from "./components/ComparisonTable";
 import LoginPage from "./components/LoginPage";
 import { phoneCatalog } from "./data/phoneCatalog";
 
+const MOBILE_API_BASE_URL = "https://api.mobileapi.dev";
+const MOBILE_API_KEY = (import.meta.env.VITE_MOBILEAPI_KEY || "").trim();
 const API_SOURCES = [
   {
     baseUrl: "https://api-mobilespecs.azharimm.site/v2",
@@ -21,8 +23,30 @@ const EMPTY_INPUT_ERROR = "Please enter both mobile names.";
 const NOT_FOUND_ERROR = "Mobile not found. Try writing the full model name.";
 const API_UNAVAILABLE_ERROR =
   "The public phone API is unavailable right now. The app can still compare phones available in the built-in demo catalog.";
+const MOBILE_API_SETUP_ERROR =
+  "MobileAPI is not configured. Add VITE_MOBILEAPI_KEY in your Vercel environment variables or local .env file.";
 const USERS_STORAGE_KEY = "mobile-comparison-users";
 const SESSION_STORAGE_KEY = "mobile-comparison-current-user";
+const KNOWN_MANUFACTURERS = [
+  "Apple",
+  "Samsung",
+  "Xiaomi",
+  "Redmi",
+  "Poco",
+  "Google",
+  "OnePlus",
+  "Vivo",
+  "Oppo",
+  "Realme",
+  "Motorola",
+  "Nothing",
+  "Huawei",
+  "Honor",
+  "Nokia",
+  "Sony",
+  "Infinix",
+  "Tecno",
+];
 
 const specMap = {
   releaseDate: {
@@ -103,6 +127,99 @@ function cleanValue(value) {
 
 function normalizeEmail(value) {
   return (value || "").trim().toLowerCase();
+}
+
+function extractManufacturer(query) {
+  const normalizedQuery = normalizeText(query);
+
+  return (
+    KNOWN_MANUFACTURERS.find((manufacturer) => {
+      const normalizedManufacturer = normalizeText(manufacturer);
+      return (
+        normalizedQuery.startsWith(`${normalizedManufacturer} `) ||
+        normalizedQuery === normalizedManufacturer
+      );
+    }) || ""
+  );
+}
+
+function parseJsonSafely(text) {
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function createBase64Image(imageData) {
+  return imageData ? `data:image/jpeg;base64,${imageData}` : "";
+}
+
+function getDisplaySizeFromResolution(value) {
+  if (!value) {
+    return "";
+  }
+
+  const match = value.match(/^([^,]+),/);
+  return match ? match[1].trim() : "";
+}
+
+function extractRamFromHardware(value) {
+  if (!value) {
+    return "";
+  }
+
+  const match = value.match(/(\d+\s*GB\s*RAM)/i);
+  return match ? match[1].replace(/\s+/g, " ").trim() : "";
+}
+
+function scoreMobileApiMatch(device, query) {
+  const normalizedQuery = normalizeText(query);
+  const normalizedName = normalizeText(device?.name || "");
+  const normalizedBrand = normalizeText(
+    device?.manufacturer_name || device?.brand_name || ""
+  );
+  const certainty = Number.parseFloat(
+    String(device?.match_certainty || "0").replace("%", "")
+  );
+
+  let score = Number.isFinite(certainty) ? certainty : 0;
+
+  if (normalizedName === normalizedQuery) {
+    score += 200;
+  }
+
+  if (`${normalizedBrand} ${normalizedName}` === normalizedQuery) {
+    score += 220;
+  }
+
+  if (device?.match_type === "exact_model") {
+    score += 120;
+  }
+
+  if (device?.match_type === "name") {
+    score += 40;
+  }
+
+  if (normalizedName.includes(normalizedQuery)) {
+    score += 70;
+  }
+
+  return score;
+}
+
+function selectBestMobileApiDevice(devices, query) {
+  if (!Array.isArray(devices) || devices.length === 0) {
+    return null;
+  }
+
+  return [...devices].sort(
+    (left, right) => scoreMobileApiMatch(right, query) - scoreMobileApiMatch(left, query)
+  )[0];
 }
 
 function getStoredUsers() {
@@ -257,11 +374,145 @@ function normalizePhoneData(detail, fallbackResult) {
 async function fetchJson(url) {
   const response = await fetch(url);
 
+  if (response.status === 204) {
+    return null;
+  }
+
   if (!response.ok) {
     throw new Error(`Request failed with status ${response.status}`);
   }
 
-  return response.json();
+  const text = await response.text();
+  return parseJsonSafely(text);
+}
+
+async function fetchMobileApiJson(path, params = {}, allowNotFound = false) {
+  if (!MOBILE_API_KEY) {
+    throw new Error("MOBILE_API_KEY_MISSING");
+  }
+
+  const url = new URL(`${MOBILE_API_BASE_URL}${path}`);
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
+  url.searchParams.set("key", MOBILE_API_KEY);
+
+  const response = await fetch(url.toString());
+
+  if (allowNotFound && response.status === 404) {
+    return null;
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(`MOBILE_API_${response.status}`);
+  }
+
+  const text = await response.text();
+  return parseJsonSafely(text);
+}
+
+async function fetchMobileApiPhone(query) {
+  const manufacturer = extractManufacturer(query);
+  let searchResponse = await fetchMobileApiJson("/devices/search/", {
+    name: query,
+    exact: true,
+    manufacturer,
+    page: 1,
+  });
+
+  let devices = searchResponse?.devices || [];
+
+  if (devices.length === 0) {
+    searchResponse = await fetchMobileApiJson("/devices/search/", {
+      name: query,
+      manufacturer,
+      page: 1,
+    });
+
+    devices = searchResponse?.devices || [];
+  }
+
+  const selectedDevice = selectBestMobileApiDevice(devices, query);
+
+  if (!selectedDevice) {
+    throw new Error("NOT_FOUND");
+  }
+
+  const [
+    displayData,
+    platformData,
+    memoryData,
+    mainCameraData,
+    selfieCameraData,
+    batteryData,
+    networkData,
+  ] = await Promise.all([
+    fetchMobileApiJson(`/devices/${selectedDevice.id}/display/`, {}, true),
+    fetchMobileApiJson(`/devices/${selectedDevice.id}/platform/`, {}, true),
+    fetchMobileApiJson(`/devices/${selectedDevice.id}/memory/`, {}, true),
+    fetchMobileApiJson(`/devices/${selectedDevice.id}/main-camera/`, {}, true),
+    fetchMobileApiJson(`/devices/${selectedDevice.id}/selfie-camera/`, {}, true),
+    fetchMobileApiJson(`/devices/${selectedDevice.id}/battery/`, {}, true),
+    fetchMobileApiJson(`/devices/${selectedDevice.id}/network/`, {}, true),
+  ]);
+
+  return {
+    name: selectedDevice.name || query,
+    brand:
+      selectedDevice.manufacturer_name ||
+      selectedDevice.brand_name ||
+      manufacturer ||
+      "Not available",
+    image: createBase64Image(selectedDevice.image_b64),
+    releaseDate: selectedDevice.release_date || "Not available",
+    displaySize:
+      displayData?.size ||
+      getDisplaySizeFromResolution(selectedDevice.screen_resolution) ||
+      "Not available",
+    displayType:
+      joinValues([displayData?.type, displayData?.resolution]) ||
+      selectedDevice.screen_resolution ||
+      "Not available",
+    processor:
+      joinValues([platformData?.chipset, platformData?.cpu]) ||
+      selectedDevice.hardware ||
+      "Not available",
+    ram:
+      memoryData?.internal ||
+      extractRamFromHardware(selectedDevice.hardware) ||
+      "Not available",
+    storage:
+      memoryData?.internal || selectedDevice.storage || "Not available",
+    rearCamera:
+      joinValues([
+        mainCameraData?.modules,
+        mainCameraData?.features,
+        mainCameraData?.video,
+      ]) ||
+      selectedDevice.camera ||
+      "Not available",
+    frontCamera:
+      joinValues([
+        selfieCameraData?.modules,
+        selfieCameraData?.features,
+        selfieCameraData?.video,
+      ]) || "Not available",
+    battery:
+      batteryData?.type ||
+      selectedDevice.battery_capacity ||
+      "Not available",
+    charging: batteryData?.charging || "Not available",
+    operatingSystem: platformData?.os || "Not available",
+    network: networkData?.technology || "Not available",
+  };
 }
 
 async function searchPhoneWithSource(query, source) {
@@ -295,13 +546,26 @@ async function searchPhone(query) {
   let lastError = null;
   let sawNetworkFailure = false;
 
+  try {
+    return await fetchMobileApiPhone(query);
+  } catch (error) {
+    lastError = error;
+
+    if (
+      error.message !== "NOT_FOUND" &&
+      error.message !== "MOBILE_API_KEY_MISSING"
+    ) {
+      sawNetworkFailure = true;
+    }
+  }
+
   for (const source of API_SOURCES) {
     try {
       return await searchPhoneWithSource(query, source);
     } catch (error) {
       lastError = error;
 
-       if (error.message !== "NOT_FOUND") {
+      if (error.message !== "NOT_FOUND") {
         sawNetworkFailure = true;
       }
     }
@@ -319,6 +583,10 @@ async function searchPhone(query) {
 
   if (sawNetworkFailure) {
     throw new Error("API_UNAVAILABLE");
+  }
+
+  if (lastError?.message === "MOBILE_API_KEY_MISSING") {
+    throw new Error("MOBILE_API_KEY_MISSING");
   }
 
   throw lastError || new Error(DEFAULT_ERROR);
@@ -523,6 +791,8 @@ export default function App() {
       setErrorMessage(
         error.message === "NOT_FOUND"
           ? NOT_FOUND_ERROR
+          : error.message === "MOBILE_API_KEY_MISSING"
+            ? MOBILE_API_SETUP_ERROR
           : error.message === "API_UNAVAILABLE"
             ? API_UNAVAILABLE_ERROR
             : DEFAULT_ERROR
