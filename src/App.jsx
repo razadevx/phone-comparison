@@ -222,6 +222,99 @@ function selectBestMobileApiDevice(devices, query) {
   )[0];
 }
 
+function scoreLocalCatalogMatch(phone, query) {
+  const normalizedQuery = normalizeText(query);
+  const normalizedName = normalizeText(phone?.name || "");
+  const normalizedBrand = normalizeText(phone?.brand || "");
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+
+  let score = 0;
+
+  if (normalizedName === normalizedQuery) {
+    score += 300;
+  }
+
+  if (`${normalizedBrand} ${normalizedName}` === normalizedQuery) {
+    score += 320;
+  }
+
+  if (normalizedName.includes(normalizedQuery)) {
+    score += 120;
+  }
+
+  if (normalizedQuery.includes(normalizedName)) {
+    score += 100;
+  }
+
+  const matchedTokens = queryTokens.filter(
+    (token) => normalizedName.includes(token) || normalizedBrand.includes(token)
+  ).length;
+
+  score += matchedTokens * 18;
+
+  if (
+    normalizedQuery.includes("ultra") &&
+    !normalizedName.includes("ultra")
+  ) {
+    score -= 140;
+  }
+
+  if (
+    normalizedQuery.includes("pro") &&
+    !normalizedName.includes("pro")
+  ) {
+    score -= 120;
+  }
+
+  if (
+    normalizedQuery.includes("plus") &&
+    !normalizedName.includes("plus")
+  ) {
+    score -= 120;
+  }
+
+  if (
+    normalizedQuery.includes("note") &&
+    !normalizedName.includes("note")
+  ) {
+    score -= 120;
+  }
+
+  return score;
+}
+
+function selectBestLocalCatalogDevice(devices, query) {
+  if (!Array.isArray(devices) || devices.length === 0) {
+    return null;
+  }
+
+  const rankedMatches = devices
+    .map((device) => ({
+      device,
+      score: scoreLocalCatalogMatch(device, query),
+    }))
+    .sort((left, right) => right.score - left.score);
+
+  const bestMatch = rankedMatches[0];
+
+  if (!bestMatch) {
+    return null;
+  }
+
+  const normalizedQuery = normalizeText(query);
+  const normalizedName = normalizeText(bestMatch.device.name);
+  const exactLikeMatch =
+    normalizedName === normalizedQuery ||
+    normalizedName.includes(normalizedQuery) ||
+    normalizedQuery.includes(normalizedName);
+
+  if (bestMatch.score < 110 && !exactLikeMatch) {
+    return null;
+  }
+
+  return bestMatch.device;
+}
+
 function getStoredUsers() {
   const rawUsers = window.localStorage.getItem(USERS_STORAGE_KEY);
 
@@ -571,7 +664,7 @@ async function searchPhone(query) {
     }
   }
 
-  const localMatch = selectBestMatch(phoneCatalog, query);
+  const localMatch = selectBestLocalCatalogDevice(phoneCatalog, query);
 
   if (localMatch) {
     return localMatch;
